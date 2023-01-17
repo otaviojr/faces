@@ -1,1 +1,8 @@
 /target
+/data
+/data_bkp
+/data_bkp1
+/processed
+/test
+faces.weigth
+results.log
