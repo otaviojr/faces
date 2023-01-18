@@ -35,7 +35,7 @@ fn main() {
     */
     
     
-    pipeline.add_layer(Mutex::new(Box::new(ConvLayer::new("conv1".to_owned(), 3, 14, (5,5), ConvLayerConfig { activation: Box::new(ReLU::new()), learn_rate: 10e-3, padding: 0, stride: 1 }))));
+    pipeline.add_layer(Mutex::new(Box::new(ConvLayer::new("conv1".to_owned(), 3, 14, (5,5), ConvLayerConfig { activation: Box::new(ReLU::new()), learn_rate: 10e-4, padding: 0, stride: 1 }))));
     pipeline.add_layer(Mutex::new(Box::new(PoolingLayer::new((2,2), PoolingLayerConfig { stride: 2}))));
     //neuron.add_layer(Mutex::new(Box::new(ConvLayer::new(14, 36, (5,5), ConvLayerConfig { activation: Box::new(ReLU::new()), learn_rate: 10e-6, padding: 0, stride: 1, weights_low: -1.5 * (-10.0 as f64).exp(), weights_high:  1.5 * (-10.0 as f64).exp()}))));
     //neuron.add_layer(Mutex::new(Box::new(PoolingLayer::new((2,2), PoolingLayerConfig { stride: 2 }))));
@@ -44,9 +44,9 @@ fn main() {
     //neuron.add_layer(Mutex::new(Box::new(ConvLayer::new(36, 16, (3,3), ConvLayerConfig { activation: Box::new(ReLU::new()), learn_rate: 10e-7, padding: 0, stride: 1, weights_low: -1.5 * (-10.0 as f64).exp(), weights_high:  1.5 * (-10.0 as f64).exp()}))));
     //neuron.add_layer(Mutex::new(Box::new(PoolingLayer::new((2,2), PoolingLayerConfig { stride: 2 }))));
     pipeline.add_layer(Mutex::new(Box::new(FlattenLayer::new())));
-    pipeline.add_layer(Mutex::new(Box::new(LinearLayer::new("lin1".to_owned(),1400, 1400, LinearLayerConfig{ activation: Box::new(ReLU::new()), learn_rate: 10e-3}))));
+    pipeline.add_layer(Mutex::new(Box::new(LinearLayer::new("lin1".to_owned(),1400, 1400, LinearLayerConfig{ activation: Box::new(ReLU::new()), learn_rate: 10e-4}))));
     //neuron.add_layer(Mutex::new(Box::new(LinearLayer::new(144, 64, LinearLayerConfig{ activation: Box::new(ReLU::new()), learn_rate: 10e-8, weights_low: -1.5 * (-10.0 as f64).exp(), weights_high: 1.5 * (-10.0 as f64).exp()}))));
-    pipeline.add_layer(Mutex::new(Box::new(LinearLayer::new("lin2".to_owned(),1400, 2, LinearLayerConfig{ activation: Box::new(SoftMax::new()), learn_rate: 10e-3}))));
+    pipeline.add_layer(Mutex::new(Box::new(LinearLayer::new("lin2".to_owned(),1400, 2, LinearLayerConfig{ activation: Box::new(SoftMax::new()), learn_rate: 10e-4}))));
 
     neuron.add_pipeline(Mutex::new(Box::new(pipeline)));
 
