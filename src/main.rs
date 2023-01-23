@@ -1,9 +1,9 @@
-use std::{sync::Mutex, fs::{self, DirEntry}, str::FromStr, error::Error, io::Write, path::PathBuf};
+use std::{sync::Mutex, fs::{self, DirEntry}, str::FromStr, error::Error, io::Write, path::PathBuf, time::Instant};
 use clap::{App, Arg, Values};
 use image::{GenericImage, EncodableLayout, GenericImageView, imageops};
 use rand::thread_rng;
 use rand::seq::SliceRandom;
-use neuron::{Neuron, math::Tensor, layers::{LinearLayer, LinearLayerConfig, ConvLayer, ConvLayerConfig, FlattenLayer, PoolingLayer, PoolingLayerConfig}, activations::{ReLU, Sigmoid, Tanh, SoftMax}, cost::Functions, pipeline::SequentialPieline, Loader};
+use neuron::{Neuron, math::Tensor, layers::{ConvLayer, ConvLayerConfig, FlattenLayer, PoolingLayer, PoolingLayerConfig, DenseLayer, DenseLayerConfig}, activations::{ReLU, Sigmoid, Tanh, SoftMax}, cost::Functions, pipeline::SequentialPieline, Loader, util::LogLevel};
 
 fn main() {
 
@@ -22,11 +22,21 @@ fn main() {
         .value_name("FILE")
         .help("Train the network before inference")
         .takes_value(false))
+    .arg(Arg::with_name("opencl")
+        .long("opencl")
+        .help("Enable OpenCL")
+        .takes_value(false))
     .arg(Arg::with_name("weigths")
         .short("w")
         .long("weights")
         .value_name("FILE")
         .help("Weights file to load")
+        .takes_value(true))
+    .arg(Arg::with_name("log-level")
+        .long("log-level")
+        .value_name("LEVEL")
+        .help("Set the log level")
+        .possible_values(&["debug", "profiling", "info", "warn", "error"])
         .takes_value(true))
     .arg(Arg::with_name("INPUT")
         .help("Image file to make the inference")
@@ -35,14 +45,32 @@ fn main() {
     .get_matches();
 
     let train = matches.is_present("train");
-    let weigths = matches.value_of("weigths").unwrap_or("faces.weigths");
+    let weigths = matches.value_of("weigths").unwrap_or("./weights/faces.weights");
     let inputs = matches.values_of("INPUT").unwrap_or(Values::default());
-    
+    let opencl = matches.is_present("opencl");
+
+    let log_level_param = matches.value_of("log-level").unwrap_or("info");
+
+    let log_level = match log_level_param {
+        "debug" => LogLevel::Debug,
+        "profiling" => LogLevel::Profiling,
+        "info" => LogLevel::Info,
+        "warn" => LogLevel::Warn,
+        "error" => LogLevel::Error,
+        _ => LogLevel::Info,
+    };
+
+    Neuron::set_log(None, log_level);
+
+    if opencl {
+        Neuron::enable_opencl();
+    }
+
     pipeline.add_layer(Mutex::new(Box::new(ConvLayer::new("conv1".to_owned(), 3, 14, (5,5), ConvLayerConfig { activation: Box::new(ReLU::new()), learn_rate: 10e-4, padding: 0, stride: 1 }))));
     pipeline.add_layer(Mutex::new(Box::new(PoolingLayer::new((2,2), PoolingLayerConfig { stride: 2}))));
     pipeline.add_layer(Mutex::new(Box::new(FlattenLayer::new())));
-    pipeline.add_layer(Mutex::new(Box::new(LinearLayer::new("lin1".to_owned(),1400, 1400, LinearLayerConfig{ activation: Box::new(ReLU::new()), learn_rate: 10e-4}))));
-    pipeline.add_layer(Mutex::new(Box::new(LinearLayer::new("lin2".to_owned(),1400, 2, LinearLayerConfig{ activation: Box::new(SoftMax::new()), learn_rate: 10e-4}))));
+    pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin1".to_owned(),1400, 1400, DenseLayerConfig{ activation: Box::new(ReLU::new()), learn_rate: 10e-4}))));
+    pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin2".to_owned(),1400, 2, DenseLayerConfig{ activation: Box::new(SoftMax::new()), learn_rate: 10e-4}))));
 
     neuron.add_pipeline(Mutex::new(Box::new(pipeline)));
 
@@ -128,7 +156,8 @@ fn main() {
                     //}
                 }
 
-                if idx > 0 && idx % 100 == 0 {
+                if (idx > 0 && idx % 100 == 0) || vec.len() <= 10{
+                    println!("Saving Weigths");
                     if let Err(error) = neuron.save(weigths) {
                         println!("Error saving weigths: ${}", error);
                     }
@@ -151,10 +180,9 @@ fn main() {
     for path in files.iter() {
         let filename = path.file_name().unwrap();
         let filename_string = filename.to_os_string();
-        println!("{}", filename_string.to_string_lossy());
         let p = path.as_path();
         let mut img = image::open(p).unwrap();
-        img = img.resize_to_fill((img_size*5) as u32, (img_size*5) as u32, imageops::FilterType::Nearest);
+        img = img.resize_to_fill((img_size*4) as u32, (img_size*4) as u32, imageops::FilterType::Nearest);
         
         let image = img.as_rgb8();
         if image.is_none() {
@@ -168,8 +196,8 @@ fn main() {
         let mut blocks = Vec::new();
         
         // Iterate over the blocks of the image
-        for y in (0..image.height() - block_size as u32).step_by(block_size/4) {
-            for x in (0..image.width() - block_size as u32).step_by(block_size/4) {
+        for y in (0..image.height() - block_size as u32).step_by(block_size/5) {
+            for x in (0..image.width() - block_size as u32).step_by(block_size/5) {
                 let mut sub_image = image.clone();
                 let block = sub_image.sub_image(x as u32, y as u32, block_size as u32, block_size as u32);
                 let block_image = block.to_image();
@@ -206,6 +234,7 @@ fn main() {
 
         let mut max_probability = 0.0;
         let mut current_probability = 0.0;
+        let start = Instant::now();
         for (i,t) in blocks.iter().enumerate() {
             //let _ = std::io::stdout().flush();
             let output = neuron.forward(t.clone());
@@ -217,8 +246,9 @@ fn main() {
                     }
                 }
             }    
-            println!("Processing {}... {}/{} - {}% ", filename_string.to_string_lossy(), i+1, blocks.len(), current_probability);
+            //println!("Processing {}... {}/{} - {}% ", filename_string.to_string_lossy(), i+1, blocks.len(), current_probability);
         }
-        println!("Final Output={}={}", filename_string.to_string_lossy(), max_probability);
+        let elapsed = start.elapsed();
+        println!("Final Output={}={} in {:?} sec", filename_string.to_string_lossy(), max_probability,elapsed.as_secs());
     }
 }
