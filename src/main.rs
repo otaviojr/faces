@@ -1,4 +1,4 @@
-use std::{sync::Mutex, fs::{self, DirEntry}, path::PathBuf, time::Instant, io::Cursor};
+use std::{sync::{Mutex,Arc}, fs::{self, DirEntry}, path::PathBuf, time::Instant, io::Cursor};
 use clap::{App, Arg, Values};
 use image::{GenericImage, imageops, ImageBuffer, Rgb, io::{Reader}, ImageFormat, EncodableLayout, DynamicImage};
 use rand::thread_rng;
@@ -85,11 +85,11 @@ fn main() {
         Neuron::enable_opencl();
     }
 
-    pipeline.add_layer(Mutex::new(Box::new(ConvLayer::new("conv1".to_owned(), 3, 14, (5,5), ConvLayerConfig { activation: Box::new(ReLU::new()), learn_rate: 10e-4, padding: 0, stride: 1 }))));
+    pipeline.add_layer(Mutex::new(Box::new(ConvLayer::new("conv1".to_owned(), 3, 14, (5,5), ConvLayerConfig { activation: Arc::new(ReLU::new()), learn_rate: 10e-6, padding: 0, stride: 1 }))));
     pipeline.add_layer(Mutex::new(Box::new(PoolingLayer::new((2,2), PoolingLayerConfig { stride: 2}))));
     pipeline.add_layer(Mutex::new(Box::new(FlattenLayer::new())));
-    pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin1".to_owned(),2744, 2744, DenseLayerConfig{ activation: Box::new(ReLU::new()), learn_rate: 10e-4}))));
-    pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin2".to_owned(),2744, 2, DenseLayerConfig{ activation: Box::new(SoftMax::new()), learn_rate: 10e-4}))));
+    pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin1".to_owned(),2744, 2744, DenseLayerConfig{ activation: Arc::new(ReLU::new()), learn_rate: 10e-6}))));
+    pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin2".to_owned(),2744, 2, DenseLayerConfig{ activation: Arc::new(SoftMax::new()), learn_rate: 10e-6}))));
 
     neuron.add_pipeline(Mutex::new(Box::new(pipeline)));
 
@@ -143,9 +143,9 @@ fn main() {
         
                 for row in data.chunks(width as usize * 3) {
                     for pixel in row.chunks_exact(3) {
-                        r.push(pixel[0] as f64 / 255.0 * 10e-1);
-                        g.push(pixel[1] as f64 / 255.0 * 10e-1);
-                        b.push(pixel[2] as f64 / 255.0 * 10e-1);
+                        r.push(pixel[0] as f32 / 255.0 * 10e-1);
+                        g.push(pixel[1] as f32 / 255.0 * 10e-1);
+                        b.push(pixel[2] as f32 / 255.0 * 10e-1);
                     }
                 }
 
@@ -155,7 +155,7 @@ fn main() {
                 input.push(Box::new(Tensor::from_data(img_size,img_size,b)));
                     
                 let label_value = filename_string.to_str().unwrap().chars().nth(0).unwrap();
-                let label_digit = label_value.to_digit(0x10).unwrap() as f64;
+                let label_digit = label_value.to_digit(0x10).unwrap() as f32;
         
                 println!("Starting Forward Propagation");
                 let output = neuron.forward(input.clone());
@@ -197,7 +197,7 @@ fn main() {
     let initial_url = urls[input_video.parse::<usize>().unwrap()];
     let url = initial_url.replace("{USER}", &user).replace("{PASSWORD}", &password);
 
-    let cam = camera::Camera::new(&url, 0.5,0.5);
+    let cam = camera::Camera::new(&url, 0.6,0.6);
 
     let mut idx = Mutex::new(0);
 
@@ -210,8 +210,9 @@ fn main() {
         let data = rgb_frame.data(0);
 
         let block_size = img_size;
-        let step = (block_size as f64 / 2.0).round();
+        let step = (block_size as f64 / 4.0).round();
         let mut blocks = Vec::new();
+        let mut blocks_images = Vec::new();
 
         for y in (0..height - block_size as u32).step_by(step as usize) {
             for x in (0..width - block_size as u32).step_by(step as usize) {
@@ -221,20 +222,20 @@ fn main() {
                 let mut b = Vec::new();
 
                 //used only to debug blocks images
-                //let mut block_pixels = Vec::new();
+                let mut block_pixels = Vec::new();
 
                 for y1 in y..y+block_size as u32 {
                     for x1 in x..x+block_size as u32 {
                         let pixel_index = (y1 * (width*3) + (x1*3)) as usize;
 
-                        r.push(data[pixel_index] as f64 / 255.0 * 10e-1);
-                        g.push(data[pixel_index+1] as f64 / 255.0 * 10e-1);
-                        b.push(data[pixel_index+2] as f64 / 255.0 * 10e-1);
+                        r.push(data[pixel_index] as f32 / 255.0 * 10e-1);
+                        g.push(data[pixel_index+1] as f32 / 255.0 * 10e-1);
+                        b.push(data[pixel_index+2] as f32 / 255.0 * 10e-1);
 
                         /* Debug block images */
-                        //block_pixels.push(data[pixel_index]);
-                        //block_pixels.push(data[pixel_index+1]);
-                        //block_pixels.push(data[pixel_index+2]);
+                        block_pixels.push(data[pixel_index]);
+                        block_pixels.push(data[pixel_index+1]);
+                        block_pixels.push(data[pixel_index+2]);
                         /* ****************** */
                     }
                 }
@@ -247,8 +248,8 @@ fn main() {
                 blocks.push(input);
 
                 /* Debug block images */
-                //let image_buffer = ImageBuffer::from_raw(block_size as u32, block_size as u32,  block_pixels.clone()).unwrap();
-                //let mut img = DynamicImage::ImageRgb8(image_buffer);
+                let image_buffer = ImageBuffer::from_raw(block_size as u32, block_size as u32,  block_pixels.clone()).unwrap();
+                let mut img = DynamicImage::ImageRgb8(image_buffer);
                 //let block_image = img.as_rgb8().unwrap();
                 //let mut debug_path = PathBuf::from("./debug");
                 //let mut debug_filename = String::from("block_");
@@ -256,6 +257,7 @@ fn main() {
                 //debug_path.push(debug_filename);
                 //block_image.save(debug_path);
                 /* ******************************* */
+                blocks_images.push(img);
             }
         }
 
@@ -286,7 +288,7 @@ fn main() {
         let image = image.unwrap();
 
         let block_size = img_size;
-        let step = (block_size as f64 / 3.0).round();
+        let step = (block_size as f32 / 3.0).round();
         let mut blocks = Vec::new();
         
         // Iterate over the blocks of the image
@@ -303,9 +305,9 @@ fn main() {
         
                 for row in block_image.chunks(block_size as usize * 3) {
                     for pixel in row.chunks_exact(3) {
-                        r.push(pixel[0] as f64 / 255.0 * 10e-1);
-                        g.push(pixel[1] as f64 / 255.0 * 10e-1);
-                        b.push(pixel[2] as f64 / 255.0 * 10e-1);
+                        r.push(pixel[0] as f32 / 255.0 * 10e-1);
+                        g.push(pixel[1] as f32 / 255.0 * 10e-1);
+                        b.push(pixel[2] as f32 / 255.0 * 10e-1);
                     }
                 }
     
@@ -328,7 +330,6 @@ fn main() {
         let mut selected_blocks = Vec::new();
 
         let mut max_probability = 0.0;
-        let mut current_probability = 0.0;
         for (i,t) in blocks.iter().enumerate() {
             //let _ = std::io::stdout().flush();
             let output = neuron.forward(t.clone());
@@ -338,6 +339,13 @@ fn main() {
                     if value > 0.7 {
                         selected_blocks.push(i);
                     }
+                    if value > 0.5 {
+                        let mut debug_path = PathBuf::from("./debug");
+                        let mut debug_filename = String::from("block_");
+                        debug_filename.push_str(&format!("_{}_{}_{}.png", *idx.lock().unwrap(), i, value));
+                        debug_path.push(debug_filename);
+                        blocks_images.get(i).unwrap().save(debug_path);
+                    }
                     if value > max_probability {
                         max_probability = value;
                     }
@@ -346,8 +354,6 @@ fn main() {
         }
 
         if selected_blocks.len() > 0 {
-            *idx.lock().unwrap() += 1;
-
             let mut debug_path = PathBuf::from("./debug");
             let mut debug_filename = idx.lock().unwrap().to_string();
             debug_filename.push_str(&format!("_{}.png", max_probability));
@@ -387,6 +393,8 @@ fn main() {
                 println!("Error writing image: {}", error);
             }
         }
+
+        *idx.lock().unwrap() += 1;
 
         let elapsed = start.elapsed();
         println!("Final Output={} in {:?} ms", max_probability,elapsed.as_millis());
