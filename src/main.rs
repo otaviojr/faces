@@ -1,4 +1,4 @@
-use std::{sync::{Mutex,Arc}, fs::{self, DirEntry}, path::PathBuf, time::Instant, io::Cursor};
+use std::{sync::{Mutex,Arc}, fs::{self, DirEntry}, path::{PathBuf, Path}, time::{Instant, Duration}, io::Cursor, thread::{Thread, self}};
 use clap::{App, Arg, Values};
 use image::{GenericImage, imageops, ImageBuffer, Rgb, io::{Reader}, ImageFormat, EncodableLayout, DynamicImage};
 use rand::thread_rng;
@@ -18,17 +18,38 @@ use std::env;
 use neuron::{Neuron, math::Tensor, layers::{ConvLayer, ConvLayerConfig, FlattenLayer, PoolingLayer, PoolingLayerConfig, DenseLayer, DenseLayerConfig}, activations::{ReLU, Sigmoid, Tanh, SoftMax}, cost::Functions, pipeline::SequentialPieline, Loader, util::LogLevel};
 
 static urls: [&str;4] = [
-                "rtsp://{USER}:{PASSWORD}@192.168.0.103/cam/realmonitor?channel=1&subtype=1",
-                "rtsp://{USER}:{PASSWORD}@192.168.0.104/cam/realmonitor?channel=1&subtype=1",
-                "rtsp://{USER}:{PASSWORD}@192.168.0.105/cam/realmonitor?channel=1&subtype=1",
-                "rtsp://{USER}:{PASSWORD}@192.168.0.106/cam/realmonitor?channel=1&subtype=1",
+                "rtsp://{USER}:{PASSWORD}@192.168.0.103/cam/realmonitor?channel=1&subtype=0",
+                "rtsp://{USER}:{PASSWORD}@192.168.0.104/cam/realmonitor?channel=1&subtype=0",
+                "rtsp://{USER}:{PASSWORD}@192.168.0.105/cam/realmonitor?channel=1&subtype=0",
+                "rtsp://{USER}:{PASSWORD}@192.168.0.106/cam/realmonitor?channel=1&subtype=0",
                 ];
 
-fn main() {
-
+fn create_network(weights: &str) -> Neuron {
     let mut neuron = Neuron::new();
     let mut pipeline = SequentialPieline::new();
 
+    //color
+    //pipeline.add_layer(Mutex::new(Box::new(ConvLayer::new("conv1".to_owned(), 3, 14, (5,5), ConvLayerConfig { activation: Arc::new(ReLU::new()), learn_rate: 10e-6, padding: 0, stride: 1 }))));
+    //pipeline.add_layer(Mutex::new(Box::new(PoolingLayer::new((2,2), PoolingLayerConfig { stride: 2}))));
+    //pipeline.add_layer(Mutex::new(Box::new(FlattenLayer::new())));
+    //pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin1".to_owned(),2744, 2744, DenseLayerConfig{ activation: Arc::new(ReLU::new()), learn_rate: 10e-6}))));
+    //pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin2".to_owned(),2744, 2, DenseLayerConfig{ activation: Arc::new(SoftMax::new()), learn_rate: 10e-6}))));
+
+    //grayscale
+    pipeline.add_layer(Mutex::new(Box::new(ConvLayer::new("conv1".to_owned(), 1, 14, (5,5), ConvLayerConfig { activation: Arc::new(ReLU::new()), learn_rate: 10e-6, padding: 0, stride: 1 }))));
+    pipeline.add_layer(Mutex::new(Box::new(PoolingLayer::new((2,2), PoolingLayerConfig { stride: 2}))));
+    pipeline.add_layer(Mutex::new(Box::new(FlattenLayer::new())));
+    pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin1".to_owned(),2744, 2744, DenseLayerConfig{ activation: Arc::new(ReLU::new()), learn_rate: 10e-6}))));
+    pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin2".to_owned(),2744, 2, DenseLayerConfig{ activation: Arc::new(Sigmoid::new()), learn_rate: 10e-6}))));
+
+    neuron.add_pipeline(Mutex::new(Box::new(pipeline)));
+    if let Err(error) = neuron.load(weights) {
+        println!("Error load weights: ${}", error);
+    }
+    neuron
+}
+
+fn main() {
     let img_size: usize = 32;
 
     let matches = App::new("Faces")
@@ -45,7 +66,7 @@ fn main() {
         .long("opencl")
         .help("Enable OpenCL")
         .takes_value(false))
-    .arg(Arg::with_name("weigths")
+    .arg(Arg::with_name("weights")
         .short("w")
         .long("weights")
         .value_name("FILE")
@@ -64,7 +85,8 @@ fn main() {
     .get_matches();
 
     let train = matches.is_present("train");
-    let weigths = matches.value_of("weigths").unwrap_or("./weights/faces.weights");
+    let weights = Arc::new(matches.value_of("weights").unwrap_or("./weights/faces.weights").to_string());
+
     let input_video = matches.value_of("INPUT").unwrap_or("0");
     let opencl = matches.is_present("opencl");
 
@@ -85,26 +107,15 @@ fn main() {
         Neuron::enable_opencl();
     }
 
-    pipeline.add_layer(Mutex::new(Box::new(ConvLayer::new("conv1".to_owned(), 3, 14, (5,5), ConvLayerConfig { activation: Arc::new(ReLU::new()), learn_rate: 10e-6, padding: 0, stride: 1 }))));
-    pipeline.add_layer(Mutex::new(Box::new(PoolingLayer::new((2,2), PoolingLayerConfig { stride: 2}))));
-    pipeline.add_layer(Mutex::new(Box::new(FlattenLayer::new())));
-    pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin1".to_owned(),2744, 2744, DenseLayerConfig{ activation: Arc::new(ReLU::new()), learn_rate: 10e-6}))));
-    pipeline.add_layer(Mutex::new(Box::new(DenseLayer::new("lin2".to_owned(),2744, 2, DenseLayerConfig{ activation: Arc::new(SoftMax::new()), learn_rate: 10e-6}))));
-
-    neuron.add_pipeline(Mutex::new(Box::new(pipeline)));
-
-    if let Err(error) = neuron.load(weigths) {
-        println!("Error load weigths: ${}", error);
-    }
-
     if train {
-
         let dir = "./data/";
         let final_dir = "./processed";
         
         let mut vec:Vec<Result<DirEntry,_>> = fs::read_dir(dir).unwrap().collect();
         let mut rng = thread_rng();
         vec.shuffle(&mut rng);
+
+        let neuron = create_network(weights.as_ref());
 
         for _ in 0 .. 1 {
             for (idx,entry) in vec.iter().enumerate() {
@@ -137,22 +148,31 @@ fn main() {
                 let data = img.as_bytes();
                 let width = img.width();
         
-                let mut r = Vec::new();
-                let mut g = Vec::new();
-                let mut b = Vec::new();
+                //color
+                //let mut r = Vec::new();
+                //let mut g = Vec::new();
+                //let mut b = Vec::new();
+                //grayscale
+                let mut bw = Vec::new();
         
                 for row in data.chunks(width as usize * 3) {
                     for pixel in row.chunks_exact(3) {
-                        r.push(pixel[0] as f32 / 255.0 * 10e-1);
-                        g.push(pixel[1] as f32 / 255.0 * 10e-1);
-                        b.push(pixel[2] as f32 / 255.0 * 10e-1);
+                        //color
+                        //r.push(pixel[0] as f32 / 255.0 * 10e-1);
+                        //g.push(pixel[1] as f32 / 255.0 * 10e-1);
+                        //b.push(pixel[2] as f32 / 255.0 * 10e-1);
+                        //grayscale
+                        bw.push((0.3 * pixel[0] as f32 + 0.59* pixel[1] as f32 + 0.11* pixel[2] as f32) / 255.0 * 10e-1);
                     }
                 }
 
                 let mut input = Vec::new();
-                input.push(Box::new(Tensor::from_data(img_size,img_size,r)));
-                input.push(Box::new(Tensor::from_data(img_size,img_size,g)));
-                input.push(Box::new(Tensor::from_data(img_size,img_size,b)));
+                //color
+                //input.push(Box::new(Tensor::from_data(img_size,img_size,r)));
+                //input.push(Box::new(Tensor::from_data(img_size,img_size,g)));
+                //input.push(Box::new(Tensor::from_data(img_size,img_size,b)));
+                //grayscale
+                input.push(Box::new(Tensor::from_data(img_size,img_size,bw)));
                     
                 let label_value = filename_string.to_str().unwrap().chars().nth(0).unwrap();
                 let label_digit = label_value.to_digit(0x10).unwrap() as f32;
@@ -176,9 +196,9 @@ fn main() {
                 }
 
                 if (idx > 0 && idx % 100 == 0) || vec.len() <= 10{
-                    println!("Saving Weigths");
-                    if let Err(error) = neuron.save(weigths) {
-                        println!("Error saving weigths: ${}", error);
+                    println!("Saving weights");
+                    if let Err(error) = neuron.save(weights.as_ref()) {
+                        println!("Error saving weights: ${}", error);
                     }
                 }
 
@@ -197,11 +217,14 @@ fn main() {
     let initial_url = urls[input_video.parse::<usize>().unwrap()];
     let url = initial_url.replace("{USER}", &user).replace("{PASSWORD}", &password);
 
-    let cam = camera::Camera::new(&url, 0.6,0.6);
+    let cam = camera::Camera::new(&url, 0.3,0.3);
 
-    let mut idx = Mutex::new(0);
+    let idx = Arc::new(Mutex::new(0));
+    let idx1 = idx.clone();
+    let w = weights.clone();
 
     if let Err(err) = cam.connect(  |rgb_frame: &mut Video, dst_width, dst_height, orig_width, orig_height| {
+        let idx2 = idx1.clone();
         let start = Instant::now();
 
         let width = rgb_frame.width();
@@ -210,16 +233,20 @@ fn main() {
         let data = rgb_frame.data(0);
 
         let block_size = img_size;
-        let step = (block_size as f64 / 4.0).round();
+        let step = (block_size as f64 / 6.0).round();
         let mut blocks = Vec::new();
-        let mut blocks_images = Vec::new();
+        let mut blocks_images = Arc::new(Mutex::new(Vec::new()));
 
         for y in (0..height - block_size as u32).step_by(step as usize) {
             for x in (0..width - block_size as u32).step_by(step as usize) {
 
-                let mut r = Vec::new();
-                let mut g = Vec::new();
-                let mut b = Vec::new();
+                //color
+                //let mut r = Vec::new();
+                //let mut g = Vec::new();
+                //let mut b = Vec::new();
+
+                //grayscale
+                let mut bw = Vec::new();
 
                 //used only to debug blocks images
                 let mut block_pixels = Vec::new();
@@ -228,9 +255,13 @@ fn main() {
                     for x1 in x..x+block_size as u32 {
                         let pixel_index = (y1 * (width*3) + (x1*3)) as usize;
 
-                        r.push(data[pixel_index] as f32 / 255.0 * 10e-1);
-                        g.push(data[pixel_index+1] as f32 / 255.0 * 10e-1);
-                        b.push(data[pixel_index+2] as f32 / 255.0 * 10e-1);
+                        //color
+                        //r.push(data[pixel_index] as f32 / 255.0 * 10e-1);
+                        //g.push(data[pixel_index+1] as f32 / 255.0 * 10e-1);
+                        //b.push(data[pixel_index+2] as f32 / 255.0 * 10e-1);
+
+                        //grayscale
+                        bw.push((0.3 * data[pixel_index] as f32 + 0.59* data[pixel_index+1] as f32 + 0.11* data[pixel_index+2] as f32) / 255.0 * 10e-1);
 
                         /* Debug block images */
                         block_pixels.push(data[pixel_index]);
@@ -241,9 +272,12 @@ fn main() {
                 }
 
                 let mut input = Vec::new();
-                input.push(Box::new(Tensor::from_data(block_size,block_size,r)));
-                input.push(Box::new(Tensor::from_data(block_size,block_size,g)));
-                input.push(Box::new(Tensor::from_data(block_size,block_size,b)));
+                //color
+                //input.push(Box::new(Tensor::from_data(block_size,block_size,r)));
+                //input.push(Box::new(Tensor::from_data(block_size,block_size,g)));
+                //input.push(Box::new(Tensor::from_data(block_size,block_size,b)));
+                //grayscale
+                input.push(Box::new(Tensor::from_data(block_size,block_size,bw)));
                     
                 blocks.push(input);
 
@@ -257,7 +291,7 @@ fn main() {
                 //debug_path.push(debug_filename);
                 //block_image.save(debug_path);
                 /* ******************************* */
-                blocks_images.push(img);
+                blocks_images.lock().unwrap().push(img);
             }
         }
 
@@ -327,11 +361,76 @@ fn main() {
             }
         }*/
 
-        let mut selected_blocks = Vec::new();
+        let mut selected_blocks = Arc::new(Mutex::new(Vec::new()));
+        let pool = Arc::new(Mutex::new(blocks));
+        let max_probability = Arc::new(Mutex::new(0.0));
 
-        let mut max_probability = 0.0;
-        for (i,t) in blocks.iter().enumerate() {
+        let threads_num = 1;
+
+        let mut threads = Vec::new();
+
+        for t in 0..threads_num {
+            let pool = pool.clone();
+            let selected_blocks = selected_blocks.clone();
+            let max_probability = max_probability.clone();
+            let idx3 = idx2.clone();
+            let bi = blocks_images.clone();
+            let w1 = w.clone();
+            threads.push(thread::spawn(move || {
+                let neuron = create_network(w1.as_ref());
+                while true {
+                    let block;
+                    let i;
+                    {
+                        let mut blocks = pool.lock().unwrap();
+                        i = blocks.len()-1;
+                        block = blocks.pop();
+                        if block.is_none() {
+                            return;
+                        }
+                    };
+                    
+                    let output = neuron.forward(block.unwrap());
+                    if let Some(ref y) = output {
+                        for k in 0..y[0].cols() {
+                            let value = y[0].get(0, k);
+                            if value > 0.7 {
+                                {
+                                    let mut selected_blocks = selected_blocks.lock().unwrap();
+                                    selected_blocks.push(i);
+                                };
+                            }
+                            if value > 0.5 {
+                                let mut debug_path = PathBuf::from("./debug");
+                                let mut debug_filename = String::from("block_");
+                                let idx4 = idx3.clone();
+                                let idx4 = idx4.lock().unwrap();
+                                debug_filename.push_str(&format!("_{}_{}_{}.png", *idx4, i, value));
+                                debug_path.push(debug_filename);
+                                {
+                                    bi.lock().unwrap()[i].save(debug_path);
+                                };
+                            }
+                            {
+                                let mut m = max_probability.lock().unwrap();
+                                if value > *m {
+                                    *m = value;
+                                }
+        
+                            };
+                        }
+                    }
+                }
+            }));
+        }
+
+        for t in threads {
+            t.join();
+        }
+
+        /*for (i,t) in blocks.iter().enumerate() {
             //let _ = std::io::stdout().flush();
+            //println!("input size = {} with size = {}x{}", t.len(), t[0].rows(), t[0].cols());
             let output = neuron.forward(t.clone());
             if let Some(ref y) = output {
                 for k in 0..y[0].cols() {
@@ -351,12 +450,13 @@ fn main() {
                     }
                 }
             }    
-        }
+        }*/
 
-        if selected_blocks.len() > 0 {
+        let sb = selected_blocks.lock().unwrap();
+        if sb.len() > 0 {
             let mut debug_path = PathBuf::from("./debug");
             let mut debug_filename = idx.lock().unwrap().to_string();
-            debug_filename.push_str(&format!("_{}.png", max_probability));
+            debug_filename.push_str(&format!("_{}.png", *max_probability.lock().unwrap()));
             debug_path.push(debug_filename);
 
             let mut wand = MagickWand::new();
@@ -365,7 +465,7 @@ fn main() {
                 println!("Error reading image: {}", err);
             }
 
-            for block in selected_blocks.iter() {
+            for block in sb.iter() {
 
                 let pos = *block as f64;
                 let current_width = ((width as f64 - block_size as f64) / step).round();
@@ -397,7 +497,7 @@ fn main() {
         *idx.lock().unwrap() += 1;
 
         let elapsed = start.elapsed();
-        println!("Final Output={} in {:?} ms", max_probability,elapsed.as_millis());
+        println!("Final Output={} in {:?} ms", max_probability.lock().unwrap(),elapsed.as_millis());
 
         1
     }) {

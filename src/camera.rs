@@ -1,4 +1,5 @@
-use ffmpeg_next::format::{input, Pixel};
+use ffmpeg_next::codec::context;
+use ffmpeg_next::format::{input, Pixel, input_with_dictionary};
 use ffmpeg_next::media::Type;
 use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
 use ffmpeg_next::util::frame::video::Video;
@@ -24,8 +25,12 @@ impl Camera {
 
     pub fn connect<F>(&self, callback: F) -> Result<(), ffmpeg_next::Error>
         where F: Fn(&mut Video, u32, u32, u32, u32) -> i32, {
-        let mut ictx = input(&self.url)?;
 
+        let mut parameters = ffmpeg_next::Dictionary::new();
+        parameters.set("-f", "v4l2");
+
+        let mut ictx = input_with_dictionary(&self.url, parameters)?;
+            
         let input = ictx
         .streams()
         .best(Type::Video)
